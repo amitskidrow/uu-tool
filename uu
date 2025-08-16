@@ -116,6 +116,7 @@ SERVICE := ${SERVICE}
 MODULE  := \$(abspath .)
 PROJECT := ${PROJECT_ROOT}
 ENTRY   ?= ${ENTRY}
+RELOAD  ?= 1
 # Stable-but-unique unit name derived from module path to avoid clashes with any persistent units
 UNIT_SUFFIX := \$(shell echo -n "\$(abspath .)" | sha1sum | cut -c1-8)
 UNIT    := uu-\$(SERVICE)-\$(UNIT_SUFFIX)
@@ -124,6 +125,9 @@ RUNLOG  := \$(RUNDIR)/run.log
 TAIL   ?= 100
 UU_ASCII ?= 0
 SECURE ?= 0
+
+# Aggregate the list of services present in this Makefile (one entry per block)
+UU_SERVICES += ${SERVICE}
 
 .PHONY: up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SERVICE} ps.${SERVICE} restart.${SERVICE} doctor.${SERVICE} unit.${SERVICE} journal.${SERVICE}
 
@@ -137,10 +141,49 @@ TARGETS_${SERVICE} := up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SER
 \$(TARGETS_${SERVICE}): RUNDIR:=\$(abspath .)/.uu/${SERVICE}
 \$(TARGETS_${SERVICE}): RUNLOG:=\$(abspath .)/.uu/${SERVICE}/run.log
 
+# Unsuffixed targets: define only once, with runtime service selection
+ifndef UU_UNSUFFIXED_DEFINED
+UU_UNSUFFIXED_DEFINED := 1
+
+.PHONY: up down logs follow ps restart doctor unit journal check-service
+
+# Choose default service if only one exists; otherwise require SERVICE=<name>
+# Only honor SERVICE when passed on the command line, not from later blocks
+DEFAULT_SERVICE = \$(if \$(filter 1,\$(words \$(UU_SERVICES))),\$(firstword \$(UU_SERVICES)),)
+CLI_SERVICE = \$(if \$(filter command line,\$(origin SERVICE)),\$(SERVICE),)
+TARGET_SERVICE = \$(if \$(CLI_SERVICE),\$(CLI_SERVICE),\$(DEFAULT_SERVICE))
+
+check-service:
+	@if [ -z "\$(TARGET_SERVICE)" ]; then \\
+	  echo "[UU] Multiple services detected: \$(UU_SERVICES)"; \\
+	  echo "[UU] Please specify SERVICE=<name>, e.g.: SERVICE=\$(firstword \$(UU_SERVICES)) make up"; \\
+	  exit 2; \\
+	fi
+
+up: check-service
+	@\$(MAKE) -s up.\$(TARGET_SERVICE)
+down: check-service
+	@\$(MAKE) -s down.\$(TARGET_SERVICE)
+logs: check-service
+	@\$(MAKE) -s logs.\$(TARGET_SERVICE)
+follow: check-service
+	@\$(MAKE) -s follow.\$(TARGET_SERVICE)
+ps: check-service
+	@\$(MAKE) -s ps.\$(TARGET_SERVICE)
+restart: check-service
+	@\$(MAKE) -s restart.\$(TARGET_SERVICE)
+doctor: check-service
+	@\$(MAKE) -s doctor.\$(TARGET_SERVICE)
+unit: check-service
+	@\$(MAKE) -s unit.\$(TARGET_SERVICE)
+journal: check-service
+	@\$(MAKE) -s journal.\$(TARGET_SERVICE)
+endif
+
 # Start: create runtime dir, truncate log, then launch via systemd-run
 up.${SERVICE}:
 	@mkdir -p "\$(RUNDIR)" && : > "\$(RUNLOG)"
-	@echo "[UU] up svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE) entry=\"\$(ENTRY)\""
+	@echo "[UU] up svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE) entry=\"\$(ENTRY)\" reload=\$(RELOAD)"
 	# Force unbuffered Python IO so logs immediately reach RUNLOG
 	@if [ "\$(SECURE)" = "1" ]; then \\
 	  systemd-run --user \\
@@ -159,7 +202,17 @@ up.${SERVICE}:
 	    --property=StandardOutput=append:"\$(RUNLOG)" \\
 	    --property=StandardError=append:"\$(RUNLOG)" \\
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
-	    bash -lc 'uv run --project "\$(PROJECT)" -- \$(ENTRY)'; \\
+	    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+	                if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
+	                  PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
+	                  cd "\$(MODULE)" && script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null < /dev/null; \\
+	                else \\
+	                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \\
+	                  exit 2; \\
+	                fi; \\
+	              else \\
+	                cd "\$(MODULE)" && uv run --project "\$(PROJECT)" -- \$(ENTRY); \\
+	              fi'; \\
 	else \\
 	  systemd-run --user \\
 	    --unit="\$(UNIT)" \\
@@ -169,7 +222,17 @@ up.${SERVICE}:
 	    --property=StandardOutput=append:"\$(RUNLOG)" \\
 	    --property=StandardError=append:"\$(RUNLOG)" \\
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
-	    bash -lc 'uv run --project "\$(PROJECT)" -- \$(ENTRY)'; \\
+	    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+	                if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
+	                  PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
+	                  cd "\$(MODULE)" && script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null < /dev/null; \\
+	                else \\
+	                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \\
+	                  exit 2; \\
+	                fi; \\
+	              else \\
+	                cd "\$(MODULE)" && uv run --project "\$(PROJECT)" -- \$(ENTRY); \\
+	              fi'; \\
 	fi || { \\
 	  echo "[UU] start failed. Try: make doctor.${SERVICE}"; \\
 	  echo "[UU] troubleshoot: journalctl --user -u \$(UNIT) -e"; \\
@@ -227,7 +290,7 @@ restart.${SERVICE}:
 
 # Doctor: run without systemd for quick diagnostics
 doctor.${SERVICE}:
-	@echo "[UU] doctor svc=\$(SERVICE) dir=\$(MODULE) entry=\"\$(ENTRY)\"; \\
+	@echo "[UU] doctor svc=\$(SERVICE) dir=\$(MODULE) entry=\"\$(ENTRY)\""; \\
 	uv run --project "\$(PROJECT)" -- \$(ENTRY)
 
 # Inspect unit metadata and journal quickly
@@ -239,58 +302,90 @@ journal.${SERVICE}:
 ${mk_end}
 EOF
 
-  read -r -d '' rd_block <<'EOF' || true
+  read -r -d '' rd_block <<EOF || true
 ${rd_start}
 ### Make-only control for '${SERVICE}'
 
-Start the service (transient \`systemd-run --user\` + \`uv run --project\`):
+#### Quick Commands (Unsuffixed)
+
+For single-service modules, use these short commands:
 
 \`\`\`sh
-make up.${SERVICE}
+make up      # Start with live reload (default)
+make down    # Stop and clean
+make logs    # Recent logs
+make follow  # Stream logs
+make ps      # Status
+make restart # Restart service
+make unit    # Inspect systemd unit metadata
+make journal # Show recent journal entries
 \`\`\`
 
-Check recent logs without blocking (default window 100 lines):
+#### Service-Specific Commands
+
+For multi-service setups or explicit control:
 
 \`\`\`sh
-make logs.${SERVICE}
+make up.${SERVICE}      # Start this specific service
+make down.${SERVICE}    # Stop this specific service
+make logs.${SERVICE}    # Logs for this service
+make follow.${SERVICE}  # Follow logs for this service
+make ps.${SERVICE}      # Status for this service
 \`\`\`
 
-Follow logs (blocks until Ctrl-C):
+#### Live Reload (Development)
+
+By default, services start with **live reload** using \`pymon\`:
 
 \`\`\`sh
-make follow.${SERVICE}
+make up                    # Starts with live reload (RELOAD=1)
+RELOAD=0 make up          # Disable live reload
 \`\`\`
 
-Stop and clean ephemeral logs/state:
+Live reload watches for file changes and automatically restarts your service. Requires \`pymon\`:
 
 \`\`\`sh
-make down.${SERVICE}
+uv add py-mon             # Add live-reload tool
 \`\`\`
 
-Status in one line (LLM-friendly):
+Ignored paths: \`.uu/\`, \`__pycache__\`, \`.git\`, \`.venv\`
+\n+If \`pymon\` is not installed and \`RELOAD=1\`, the start command exits gracefully with a helpful message. Disable reload via \`RELOAD=0\` or install \`py-mon\`.
 
-\`\`\`sh
-make ps.${SERVICE}
-\`\`\`
+#### Configuration
 
 > Default entry: **${ENTRY}** (module: ${MODULE_ABS}, project: ${PROJECT_ROOT})
-> Override example: \`make up.${SERVICE} ENTRY="python worker.py --port 9000"\`
+> Override example: \`make up ENTRY="python worker.py --port 9000"\`
+
+#### Advanced Options
 
 Hardened mode (opt-in): set \`SECURE=1\` to enable stronger systemd sandboxing.
 
 \`\`\`sh
-SECURE=1 make up.${SERVICE}
+SECURE=1 make up
 \`\`\`
 
 Doctor (no systemd): run the command in-foreground for quick verification.
 
 \`\`\`sh
-make doctor.${SERVICE}
+make doctor
 \`\`\`
 
-Troubleshooting:
-- If the first run fails, ensure \`uv\` can create \`.venv\` (avoid \`ProtectHome=read-only\` unless venv exists).
-- Check logs: \`make logs.${SERVICE}\` or journal: \`journalctl --user -u uu-${SERVICE} -e\`.
+#### Multi-Service Usage
+
+When multiple services exist in the same Makefile, unsuffixed commands require explicit service selection:
+
+\`\`\`sh
+SERVICE=worker make up    # Start specific service
+make up.worker           # Alternative syntax
+\`\`\`
+\n+If more than one service is detected and no \`SERVICE\` is set, unsuffixed commands emit a helpful error listing available services.
+
+#### Troubleshooting
+
+- **Live reload fails**: Ensure \`pymon\` is installed: \`uv add py-mon\`
+- **First run fails**: Ensure \`uv\` can create \`.venv\` (avoid \`ProtectHome=read-only\` unless venv exists)
+- **Check logs**: \`make logs\` or journal: \`journalctl --user -u uu-${SERVICE} -e\`
+- **Service conflicts**: Use service-specific targets: \`make up.${SERVICE}\`
 ${rd_end}
 EOF
 
@@ -309,4 +404,3 @@ EOF
 }
 
 main "$@"
-

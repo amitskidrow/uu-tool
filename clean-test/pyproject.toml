@@ -1,7 +1,0 @@
-[project]
-name = "random-service"
-version = "0.1.0"
-description = "Random number generator service"
-readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
