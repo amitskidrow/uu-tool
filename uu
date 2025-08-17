@@ -5,7 +5,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 SCRIPT_NAME=${0##*/}
-VERSION="0.3.3"
+VERSION="0.3.5"
 
 # Defaults (globals)
 SERVICE=""
@@ -109,7 +109,7 @@ main() {
   local mk_block rd_block
   # --- Build templates inline like original ---
   local mk_block rd_block
-  read -r -d '' mk_block <<EOF || true
+  read -r -d '' mk_block <<'EOF' || true
 ${mk_start}
 # Make-only uu glue for service '${SERVICE}' (module-local)
 
@@ -314,7 +314,7 @@ journal.${SERVICE}:
 ${mk_end}
 EOF
 
-  read -r -d '' rd_block <<EOF || true
+  read -r -d '' rd_block <<'EOF' || true
 ${rd_start}
 ### Make-only control for '${SERVICE}'
 
