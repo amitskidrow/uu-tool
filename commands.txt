@@ -1,0 +1,1 @@
+curl -sSL https://raw.githubusercontent.com/YOURUSERNAME/uu-tool/main/install.sh | bash
