@@ -1,0 +1,51 @@
+Metadata-Version: 2.4
+Name: uu-playground
+Version: 0.0.0
+Summary: Playground project for uu system testing
+Author: playground
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: py-mon>=2.1.0
+
+uu — Make-only service bootstrapper (LLM-optimized brief)
+
+Summary
+- Purpose: generate a single-file Make glue to run a uv-based Python module under `systemd-run` with optional live reload.
+- Outputs: a tagged Makefile block (module-local) and a minimal README section; logs are per-run with a stable `run.log` handle.
+- Current version: 0.3.3.
+
+Core Commands (unsuffixed)
+- `make up`: restart-by-default (down+up); live reload on by default.
+- `make down`: stop unit; remove ephemeral handles.
+- `make logs`: tail recent lines from current run.
+- `make follow`: stream current run.
+- `make ps`: one-line status (RUNNING/STARTING/FAILED/INACTIVE).
+- `make restart`: explicit restart.
+
+Log Semantics (Policy-A)
+- Per-run file: `${XDG_STATE_HOME:-$HOME/.local/state}/uu/<service>/logs/<service>-<UTC>-<token>.log`.
+- Handle: module-local `./.uu/<service>/run.log` is a symlink to the current run; removed on stop/stale.
+- Pruning: keep-last-N archives (`KEEP_N`, default `10`) by mtime.
+- Fallback: if no `run.log`, `logs/follow` use `journalctl --user -u <unit>`.
+
+Process Model
+- Unit: `uu-<service>-<unit_suffix>` where `<unit_suffix>` = first 8 chars of `sha1sum(abspath(module))`.
+- Live reload: `pymon` (if present) runs under a PTY (`tail -f /dev/null | script -qfc ...`) so stdin stays open under systemd.
+- If `pymon` missing and `RELOAD=1`, start exits with an instructive message (use `RELOAD=0` or `uv add py-mon`).
+
+Key Variables (Makefile)
+- `SERVICE` (name), `ENTRY` (command, default `python main.py` or file-provided), `RELOAD` (1/0), `SECURE` (1/0).
+- `KEEP_N` (default `10`), `STATE_DIR`, `LOGDIR`, `RUNDIR`, `RUNLOG`, `TAIL`, `UU_ASCII`.
+
+Invariants
+- `make up` is idempotent restart behavior.
+- Logs are never rotated in-place; each run writes a new file; `run.log` just points to the active one.
+- Stopping removes the `run.log` symlink; archives remain.
+
+Generation Notes
+- The generated Makefile content is wrapped in tagged markers: `### >>> uu:init make (...)` and `### <<< ...`.
+- Do not edit inside the tagged block; re-run `uu` to regenerate with new settings.
+
+Fixture
+- Example module: `ss-test/` demonstrates per-run logs, restart-by-default, and live reload wiring.
+

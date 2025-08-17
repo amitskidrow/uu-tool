@@ -1,0 +1,17 @@
+[project]
+name = "uu-playground"
+version = "0.0.0"
+description = "Playground project for uu system testing"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "playground" }]
+
+# Start without py-mon to test graceful handling; add later
+dependencies = [
+    "py-mon>=2.1.0",
+]
+
+[tool.uv]
+package = true
+dev-dependencies = []
+

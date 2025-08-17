@@ -2,7 +2,6 @@ import random
 import time
 from datetime import datetime
 
-
 def main():
     print("🎲 Random Number Generator Started (live reload test)")
     print("=" * 50)
@@ -10,8 +9,8 @@ def main():
     counter = 1
     while True:
         try:
-            # Generate a 3-digit random number (live reload test change)
-            random_num = random.randint(1, 5)
+            # Generate a 4-digit random number (live reload verification)
+            random_num = random.randint(2222, 9999)
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

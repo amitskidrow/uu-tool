@@ -23,6 +23,7 @@ check "UU_UNSUFFIXED_DEFINED" "Unsuffixed guard defined"
 check "check-service:" "check-service rule present"
 check "UU_SERVICES +=" "Service aggregation present"
 check "pymon not found; RELOAD=1 requires pymon" "Graceful pymon handling"
+check "KEEP_N ?= " "Keep-last-N variable present"
+check "LOGDIR    :=" "XDG state LOGDIR present"
 
 $pass && exit 0 || exit 1
-

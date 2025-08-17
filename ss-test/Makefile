@@ -4,7 +4,7 @@
 # === Fixed, overridable variables ===
 SERVICE := ss-test
 MODULE  := $(abspath .)
-PROJECT := /home/ss/PycharmProjects/playground/ss-test
+PROJECT := /home/ss/PycharmProjects/playground
 ENTRY   ?= python main.py
 RELOAD  ?= 1
 # Stable-but-unique unit name derived from module path to avoid clashes with any persistent units
@@ -15,6 +15,10 @@ RUNLOG  := $(RUNDIR)/run.log
 TAIL   ?= 100
 UU_ASCII ?= 0
 SECURE ?= 0
+KEEP_N ?= 10
+# XDG state for persistent per-run logs (archives)
+STATE_DIR := $(if $(XDG_STATE_HOME),$(XDG_STATE_HOME),$(HOME)/.local/state)
+LOGDIR    := $(STATE_DIR)/uu/$(SERVICE)/logs
 
 # Aggregate the list of services present in this Makefile (one entry per block)
 UU_SERVICES += ss-test
@@ -25,7 +29,7 @@ UU_SERVICES += ss-test
 TARGETS_ss-test := up.ss-test down.ss-test logs.ss-test follow.ss-test ps.ss-test restart.ss-test doctor.ss-test unit.ss-test journal.ss-test
 $(TARGETS_ss-test): SERVICE:=ss-test
 $(TARGETS_ss-test): MODULE:=$(abspath .)
-$(TARGETS_ss-test): PROJECT:=/home/ss/PycharmProjects/playground/ss-test
+$(TARGETS_ss-test): PROJECT:=/home/ss/PycharmProjects/playground
 $(TARGETS_ss-test): ENTRY:=python main.py
 $(TARGETS_ss-test): UNIT:=uu-ss-test-$(shell echo -n "$(abspath .)" | sha1sum | cut -c1-8)
 $(TARGETS_ss-test): RUNDIR:=$(abspath .)/.uu/ss-test
@@ -44,10 +48,14 @@ CLI_SERVICE = $(if $(filter command line,$(origin SERVICE)),$(SERVICE),)
 TARGET_SERVICE = $(if $(CLI_SERVICE),$(CLI_SERVICE),$(DEFAULT_SERVICE))
 
 check-service:
-	@if [ -z "$(TARGET_SERVICE)" ]; then 	  echo "[UU] Multiple services detected: $(UU_SERVICES)"; 	  echo "[UU] Please specify SERVICE=<name>, e.g.: SERVICE=$(firstword $(UU_SERVICES)) make up"; 	  exit 2; 	fi
+	@if [ -z "$(TARGET_SERVICE)" ]; then \
+	  echo "[UU] Multiple services detected: $(UU_SERVICES)"; \
+	  echo "[UU] Please specify SERVICE=<name>, e.g.: SERVICE=$(firstword $(UU_SERVICES)) make up"; \
+	  exit 2; \
+	fi
 
 up: check-service
-	@$(MAKE) -s up.$(TARGET_SERVICE)
+	@$(MAKE) -s restart.$(TARGET_SERVICE)
 down: check-service
 	@$(MAKE) -s down.$(TARGET_SERVICE)
 logs: check-service
@@ -66,10 +74,13 @@ journal: check-service
 	@$(MAKE) -s journal.$(TARGET_SERVICE)
 endif
 
-# Start: create runtime dir, truncate log, then launch via systemd-run
+# Start: create state + runtime dir, create per-run logfile, symlink run.log, launch via systemd-run
 up.ss-test:
-	@mkdir -p "$(RUNDIR)" && : > "$(RUNLOG)"
-	@echo "[UU] up svc=$(SERVICE) unit=$(UNIT) dir=$(MODULE) entry="$(ENTRY)" reload=$(RELOAD)"
+	@mkdir -p "$(RUNDIR)" "$(LOGDIR)"
+	@TS=$$(date -u +%Y%m%dT%H%M%SZ); LOGFILE="$(LOGDIR)/$(SERVICE)-$$TS-$(UNIT_SUFFIX).log"; \
+	  ln -sfn "$$LOGFILE" "$(RUNLOG)"; \
+	  echo "[UU] up svc=$(SERVICE) unit=$(UNIT) dir=$(MODULE) entry=\"$(ENTRY)\" reload=$(RELOAD) log=$$LOGFILE"; \
+	  echo "[UU] log handle: $(RUNLOG) -> $$([ -e "$(RUNLOG)" ] && readlink -f "$(RUNLOG)" 2>/dev/null || echo -)"
 	# Force unbuffered Python IO so logs immediately reach RUNLOG
 	@if [ "$(SECURE)" = "1" ]; then \
 	  systemd-run --user \
@@ -85,13 +96,13 @@ up.ss-test:
 	    --property=MemoryDenyWriteExecute=yes \
 	    --property=TimeoutStartSec=30s \
 	    --property=Restart=no \
-	    --property=StandardOutput=append:"$(RUNLOG)" \
-	    --property=StandardError=append:"$(RUNLOG)" \
+	    --property=StandardOutput=append:"$$(readlink -f "$(RUNLOG)")" \
+	    --property=StandardError=append:"$$(readlink -f "$(RUNLOG)")" \
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \
 	    bash -lc 'if [ "$(RELOAD)" = "1" ]; then \
 	                if uv run --project "$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \
 	                  PYMON_FILE=$$(echo "$(ENTRY)" | sed "s/^python //"); \
-	                  cd "$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project "$(PROJECT)" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv $$PYMON_FILE" /dev/null; \
+	                  cd "$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv $$PYMON_FILE" /dev/null; \
 	                else \
 	                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \
 	                  exit 2; \
@@ -105,13 +116,13 @@ up.ss-test:
 	    --property=WorkingDirectory="$(MODULE)" \
 	    --property=TimeoutStartSec=30s \
 	    --property=Restart=no \
-	    --property=StandardOutput=append:"$(RUNLOG)" \
-	    --property=StandardError=append:"$(RUNLOG)" \
+	    --property=StandardOutput=append:"$$(readlink -f "$(RUNLOG)")" \
+	    --property=StandardError=append:"$$(readlink -f "$(RUNLOG)")" \
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \
 	    bash -lc 'if [ "$(RELOAD)" = "1" ]; then \
 	                if uv run --project "$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \
 	                  PYMON_FILE=$$(echo "$(ENTRY)" | sed "s/^python //"); \
-	                  cd "$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project "$(PROJECT)" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv $$PYMON_FILE" /dev/null; \
+	                  cd "$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv $$PYMON_FILE" /dev/null; \
 	                else \
 	                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \
 	                  exit 2; \
@@ -125,6 +136,9 @@ up.ss-test:
 	  echo "[UU] tip: enable hardening with SECURE=1 once .venv exists"; \
 	  exit 1; \
 	}
+	@# Prune archives: keep last N by mtime
+	@find "$(LOGDIR)" -maxdepth 1 -type f -name "$(SERVICE)-*.log*" -printf '%T@ %p\n' | \
+	  sort -nr | awk '{print $$2}' | awk 'NR>$(KEEP_N)' | xargs -r rm -f --
 
 # Stop: stop the unit and clean ephemeral logs/state
 down.ss-test:
@@ -135,15 +149,39 @@ down.ss-test:
 
 # Status: single-line summary for LLMs
 ps.ss-test:
-	@ACTIVE=$$(systemctl --user show -p ActiveState --value "$(UNIT)" 2>/dev/null || echo inactive); 	SUB=$$(systemctl --user show -p SubState --value "$(UNIT)" 2>/dev/null || echo -); 	PID=$$(systemctl --user show -p MainPID --value "$(UNIT)" 2>/dev/null || echo -); 	STATE=INACTIVE; 	if [ "$$ACTIVE" = "active" ] && [ "$$SUB" = "running" ]; then STATE=RUNNING; 	elif [ "$$ACTIVE" = "activating" ]; then STATE=STARTING; 	elif [ "$$ACTIVE" = "failed" ]; then STATE=FAILED; fi; 	echo "[UU] ps svc=$(SERVICE) state=$$STATE pid=$$PID uptime=-"
+	@ACTIVE=$$(systemctl --user show -p ActiveState --value "$(UNIT)" 2>/dev/null || echo inactive); \
+	SUB=$$(systemctl --user show -p SubState --value "$(UNIT)" 2>/dev/null || echo -); \
+	PID=$$(systemctl --user show -p MainPID --value "$(UNIT)" 2>/dev/null || echo -); \
+	STATE=INACTIVE; \
+	if [ "$$ACTIVE" = "active" ] && [ "$$SUB" = "running" ]; then STATE=RUNNING; \
+	elif [ "$$ACTIVE" = "activating" ]; then STATE=STARTING; \
+	elif [ "$$ACTIVE" = "failed" ]; then STATE=FAILED; fi; \
+	echo "[UU] ps svc=$(SERVICE) state=$$STATE pid=$$PID uptime=-"
 
 # Logs (snapshot): default non-blocking view
 logs.ss-test:
-	@echo "[UU] logs svc=$(SERVICE) tail=$(TAIL) dir=$(MODULE)"; 	if [ "$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; 	if [ -s "$(RUNLOG)" ]; then 	  tail -n $(TAIL) "$(RUNLOG)" | sed 's/^/[LOG] /'; 	else 	  ACTIVE=$$(systemctl --user is-active "$(UNIT)" 2>/dev/null || true); 	  if [ "$$ACTIVE" = "active" ] || [ "$$ACTIVE" = "activating" ]; then 	    journalctl --user -u "$(UNIT)" -n $(TAIL) --no-pager | sed 's/^/[JRN] /'; exit 0; 	  else 	    echo "[UU] logs svc=$(SERVICE) no-log not-running dir=$(MODULE)"; exit 5; 	  fi; 	fi
+	@echo "[UU] logs svc=$(SERVICE) tail=$(TAIL) dir=$(MODULE)"; \
+	if [ "$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; \
+	if [ -s "$(RUNLOG)" ]; then \
+	  tail -n $(TAIL) "$(RUNLOG)" | sed 's/^/[LOG] /'; \
+	else \
+	  ACTIVE=$$(systemctl --user is-active "$(UNIT)" 2>/dev/null || true); \
+	  if [ "$$ACTIVE" = "active" ] || [ "$$ACTIVE" = "activating" ]; then \
+	    journalctl --user -u "$(UNIT)" -n $(TAIL) --no-pager | sed 's/^/[JRN] /'; exit 0; \
+	  else \
+	    echo "[UU] logs svc=$(SERVICE) no-log not-running dir=$(MODULE)"; exit 5; \
+	  fi; \
+	fi
 
 # Logs (follow): stream raw lines after a single header and separator
 follow.ss-test:
-	@echo "[UU] logs svc=$(SERVICE) follow dir=$(MODULE)"; 	if [ "$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; 	if [ -s "$(RUNLOG)" ]; then 	  tail -F "$(RUNLOG)"; 	else 	  journalctl --user -u "$(UNIT)" -f --no-pager; 	fi
+	@echo "[UU] logs svc=$(SERVICE) follow dir=$(MODULE)"; \
+	if [ "$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; \
+	if [ -s "$(RUNLOG)" ]; then \
+	  tail -F "$(RUNLOG)"; \
+	else \
+	  journalctl --user -u "$(UNIT)" -f --no-pager; \
+	fi
 
 # Restart: down then up
 restart.ss-test:
@@ -152,7 +190,8 @@ restart.ss-test:
 
 # Doctor: run without systemd for quick diagnostics
 doctor.ss-test:
-	@echo "[UU] doctor svc=$(SERVICE) dir=$(MODULE) entry="$(ENTRY)""; 	uv run --project "$(PROJECT)" -- $(ENTRY)
+	@echo "[UU] doctor svc=$(SERVICE) dir=$(MODULE) entry=\"$(ENTRY)\""; \
+	uv run --project "$(PROJECT)" -- $(ENTRY)
 
 # Inspect unit metadata and journal quickly
 unit.ss-test:
@@ -161,3 +200,4 @@ unit.ss-test:
 journal.ss-test:
 	@journalctl --user -u "$(UNIT)" -n $(TAIL) --no-pager
 ### <<< uu:init make (ss-test)
+

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# One-liner to run uu directly from git without local installation
+
+REPO_URL="https://raw.githubusercontent.com/yourusername/uu-tool/main"
+TEMP_DIR=$(mktemp -d)
+trap "rm -rf $TEMP_DIR" EXIT
+
+# Download main script and lib files
+curl -s "$REPO_URL/uu" > "$TEMP_DIR/uu"
+mkdir -p "$TEMP_DIR/lib/uu"
+curl -s "$REPO_URL/lib/uu/common.sh" > "$TEMP_DIR/lib/uu/common.sh"
+curl -s "$REPO_URL/lib/uu/fs.sh" > "$TEMP_DIR/lib/uu/fs.sh"
+curl -s "$REPO_URL/lib/uu/project.sh" > "$TEMP_DIR/lib/uu/project.sh"
+curl -s "$REPO_URL/lib/uu/args.sh" > "$TEMP_DIR/lib/uu/args.sh"
+
+chmod +x "$TEMP_DIR/uu"
+exec "$TEMP_DIR/uu" "$@"
