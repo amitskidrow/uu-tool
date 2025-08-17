@@ -5,6 +5,7 @@ parse_args() {
   while (( $# )); do
     case "$1" in
       -h|--help) usage; exit 0 ;;
+      -V|--version) echo "${SCRIPT_NAME} v${VERSION}"; exit 0 ;;
       *) break ;;
     esac
   done
