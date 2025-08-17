@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-REPO_URL="${1:-https://github.com/yourusername/uu-tool.git}"
+REPO_URL="${1:-https://github.com/amitskidrow/uu-tool.git}"
 INSTALL_DIR="${HOME}/.local/bin"
 UU_CLONE_DIR="${HOME}/.local/share/uu-tool"
 

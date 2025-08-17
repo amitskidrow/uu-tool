@@ -36,7 +36,7 @@ setup(
     author="Your Name",
     description="Make-only bootstrap for uv-based Python modules",
     long_description="Bootstrap tool for uv-based Python development with Make integration",
-    url="https://github.com/yourusername/uu-tool",
+    url="https://github.com/amitskidrow/uu-tool",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
@@ -49,7 +49,7 @@ EOF
 echo "✓ setup.py created!"
 echo ""
 echo "Now you can install from git on any system:"
-echo "  pip install git+https://github.com/yourusername/uu-tool.git"
+echo "  pip install git+https://github.com/amitskidrow/uu-tool.git"
 echo ""
 echo "Or install in development mode:"
-echo "  pip install -e git+https://github.com/yourusername/uu-tool.git#egg=uu-tool"
+echo "  pip install -e git+https://github.com/amitskidrow/uu-tool.git#egg=uu-tool"

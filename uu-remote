@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-liner to run uu directly from git without local installation
 
-REPO_URL="https://raw.githubusercontent.com/yourusername/uu-tool/main"
+REPO_URL="https://raw.githubusercontent.com/amitskidrow/uu-tool/main"
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 

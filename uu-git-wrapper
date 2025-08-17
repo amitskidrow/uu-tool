@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-REPO_URL="${UU_REPO_URL:-https://github.com/yourusername/uu-tool.git}"
+REPO_URL="${UU_REPO_URL:-https://github.com/amitskidrow/uu-tool.git}"
 CACHE_DIR="${HOME}/.cache/uu-tool"
 UPDATE_INTERVAL=3600  # 1 hour
 
