@@ -138,14 +138,14 @@ UU_SERVICES += ${SERVICE}
 .PHONY: up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SERVICE} ps.${SERVICE} restart.${SERVICE} doctor.${SERVICE} unit.${SERVICE} journal.${SERVICE}
 
 # Target-specific vars to avoid cross-service bleed
-TARGETS_${SERVICE} := up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SERVICE} ps.${SERVICE} restart.${SERVICE} doctor.${SERVICE} unit.${SERVICE} journal.${SERVICE}
-\$(TARGETS_${SERVICE}): SERVICE:=${SERVICE}
-\$(TARGETS_${SERVICE}): MODULE:=\$(abspath .)
-\$(TARGETS_${SERVICE}): PROJECT:=${PROJECT_ROOT}
-\$(TARGETS_${SERVICE}): ENTRY:=${ENTRY}
-\$(TARGETS_${SERVICE}): UNIT:=uu-${SERVICE}-\$(shell echo -n "\$(abspath .)" | sha1sum | cut -c1-8)
-\$(TARGETS_${SERVICE}): RUNDIR:=\$(abspath .)/.uu/${SERVICE}
-\$(TARGETS_${SERVICE}): RUNLOG:=\$(abspath .)/.uu/${SERVICE}/run.log
+TARGETS_\${SERVICE} := up.\${SERVICE} down.\${SERVICE} logs.\${SERVICE} follow.\${SERVICE} ps.\${SERVICE} restart.\${SERVICE} doctor.\${SERVICE} unit.\${SERVICE} journal.\${SERVICE}
+\$(TARGETS_\${SERVICE}): SERVICE:=\${SERVICE}
+\$(TARGETS_\${SERVICE}): MODULE:=\$(abspath .)
+\$(TARGETS_\${SERVICE}): PROJECT:=\${PROJECT_ROOT}
+\$(TARGETS_\${SERVICE}): ENTRY:=\${ENTRY}
+\$(TARGETS_\${SERVICE}): UNIT:=uu-\${SERVICE}-\$(shell echo -n "\$(abspath .)" | sha1sum | cut -c1-8)
+\$(TARGETS_\${SERVICE}): RUNDIR:=\$(abspath .)/.uu/\${SERVICE}
+\$(TARGETS_\${SERVICE}): RUNLOG:=\$(abspath .)/.uu/\${SERVICE}/run.log
 
 # Unsuffixed targets: define only once, with runtime service selection
 ifndef UU_UNSUFFIXED_DEFINED
