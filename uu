@@ -210,7 +210,7 @@ up.${SERVICE}:
 	    --property=StandardOutput=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
 	    --property=StandardError=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
-    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+	bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
                 if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
                   PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
                   cd "\$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null; \\
@@ -230,7 +230,7 @@ up.${SERVICE}:
 	    --property=StandardOutput=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
 	    --property=StandardError=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
 	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
-    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+	bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
                 if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
                   PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
                   cd "\$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null; \\
