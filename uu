@@ -106,7 +106,6 @@ main() {
   rd_start="<!-- >>> uu:init readme ($SERVICE) -->"
   rd_end="<!-- <<< uu:init readme ($SERVICE) -->"
 
-  local mk_block rd_block
   # --- Build templates inline like original ---
   local mk_block rd_block
   read -r -d '' mk_block <<'EOF' || true
@@ -189,10 +188,10 @@ endif
 # Start: create state + runtime dir, create per-run logfile, symlink run.log, launch via systemd-run
 up.${SERVICE}:
 	@mkdir -p "\$(RUNDIR)" "\$(LOGDIR)"
-	@TS=\$$(date -u +%Y%m%dT%H%M%SZ); LOGFILE="\$(LOGDIR)/\$(SERVICE)-\$$TS-\$(UNIT_SUFFIX).log"; \\
-	  ln -sfn "\$$LOGFILE" "\$(RUNLOG)"; \\
-	  echo "[UU] up svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE) entry=\"\$(ENTRY)\" reload=\$(RELOAD) log=\$$LOGFILE"; \\
-	  echo "[UU] log handle: \$(RUNLOG) -> \$$(readlink -f \"\$(RUNLOG)\" 2>/dev/null || echo -)"
+	@TS=\$\$(date -u +%Y%m%dT%H%M%SZ); LOGFILE="\$(LOGDIR)/\$(SERVICE)-\$\$TS-\$(UNIT_SUFFIX).log"; \\
+	  ln -sfn "\$\$LOGFILE" "\$(RUNLOG)"; \\
+	  echo "[UU] up svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE) entry=\"\$(ENTRY)\" reload=\$(RELOAD) log=\$\$LOGFILE"; \\
+	  echo "[UU] log handle: \$(RUNLOG) -> \$\$(readlink -f \"\$(RUNLOG)\" 2>/dev/null || echo -)"
 	# Force unbuffered Python IO so logs immediately reach RUNLOG
 	@if [ "\$(SECURE)" = "1" ]; then \\
 	  systemd-run --user \\
@@ -361,7 +360,8 @@ uv add py-mon             # Add live-reload tool
 \`\`\`
 
 Ignored paths: \`.uu/\`, \`__pycache__\`, \`.git\`, \`.venv\`
-\n+If \`pymon\` is not installed and \`RELOAD=1\`, the start command exits gracefully with a helpful message. Disable reload via \`RELOAD=0\` or install \`py-mon\`.
+
+If \`pymon\` is not installed and \`RELOAD=1\`, the start command exits gracefully with a helpful message. Disable reload via \`RELOAD=0\` or install \`py-mon\`.
 
 Note: Live reload is launched under a pseudo‑TTY using \`script(1)\` with a persistent stdin, so it works correctly under \`systemd\` and avoids EOF on \`pymon\`'s input.
 
@@ -392,7 +392,8 @@ When multiple services exist in the same Makefile, unsuffixed commands require e
 SERVICE=worker make up    # Start specific service
 make up.worker           # Alternative syntax
 \`\`\`
-\n+If more than one service is detected and no \`SERVICE\` is set, unsuffixed commands emit a helpful error listing available services.
+
+If more than one service is detected and no \`SERVICE\` is set, unsuffixed commands emit a helpful error listing available services.
 
 #### Troubleshooting
 
@@ -402,6 +403,19 @@ make up.worker           # Alternative syntax
 - **Service conflicts**: Use service-specific targets: \`make up.${SERVICE}\`
 ${rd_end}
 EOF
+
+  # --- Post-process template placeholders (safe text substitution) ---
+  mk_block=$(printf '%s' "$mk_block" | sed \
+    -e "s/\${mk_start}/$mk_start/g" \
+    -e "s/\${mk_end}/$mk_end/g" \
+    -e "s/\${SERVICE}/$(printf '%s' "$SERVICE" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${PROJECT_ROOT}/$(printf '%s' "$PROJECT_ROOT" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${ENTRY}/$(printf '%s' "$ENTRY" | sed 's/[\\&/]/\\&/g')/g")
+  rd_block=$(printf '%s' "$rd_block" | sed \
+    -e "s/\${rd_start}/$rd_start/g" \
+    -e "s/\${rd_end}/$rd_end/g" \
+    -e "s/\${SERVICE}/$(printf '%s' "$SERVICE" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${ENTRY}/$(printf '%s' "$ENTRY" | sed 's/[\\&/]/\\&/g')/g")
 
   # --- Write files in module dir ---
   if (( ! README_ONLY )); then upsert_block "$MAKEFILE_OUT" "$mk_start" "$mk_end" "$mk_block"; fi
