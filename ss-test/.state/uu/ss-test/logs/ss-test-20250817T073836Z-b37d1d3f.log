@@ -1,4 +1,0 @@
-[pymon] watching *.py in .
-[pymon] ignoring patterns: .uu/, __pycache__, .git, .venv
-[pymon] enter 'rs' to restart or 'stop' to terminate
-[pymon] starting main.py

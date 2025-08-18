@@ -1,7 +1,0 @@
-README.md
-pyproject.toml
-uu_playground.egg-info/PKG-INFO
-uu_playground.egg-info/SOURCES.txt
-uu_playground.egg-info/dependency_links.txt
-uu_playground.egg-info/requires.txt
-uu_playground.egg-info/top_level.txt

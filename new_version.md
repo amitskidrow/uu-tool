@@ -1,0 +1,437 @@
+~
+❯ cat /home/ss/.local/bin/uu
+#!/usr/bin/env bash
+# uu — bootstrap a uv-based Python module directory for Make-only control
+
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+SCRIPT_NAME=${0##*/}
+VERSION="0.3.7"
+
+# Defaults (globals)
+SERVICE=""
+ENTRY=""           # If empty -> computed default
+MAKEFILE_OUT="Makefile"
+README_OUT="README.md"
+DRY_RUN=0
+YES=0
+MK_ONLY=0
+README_ONLY=0
+
+# Resolve library directory for sourcing modules
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+UU_LIB_DIR_CANDIDATES=(
+  "${UU_LIB_DIR:-}"
+  "${SCRIPT_DIR}/lib/uu"
+  "${SCRIPT_DIR}/../lib/uu"
+)
+for cand in "${UU_LIB_DIR_CANDIDATES[@]}"; do
+  if [[ -n "$cand" && -d "$cand" ]]; then UU_LIB_DIR="$cand"; break; fi
+done
+if [[ -z "${UU_LIB_DIR:-}" || ! -d "$UU_LIB_DIR" ]]; then
+  echo "[ERR] UU library directory not found. Tried: ${UU_LIB_DIR_CANDIDATES[*]}" >&2
+  exit 3
+fi
+
+# shellcheck source=lib/uu/common.sh
+. "$UU_LIB_DIR/common.sh"
+# shellcheck source=lib/uu/fs.sh
+. "$UU_LIB_DIR/fs.sh"
+# shellcheck source=lib/uu/project.sh
+. "$UU_LIB_DIR/project.sh"
+# shellcheck source=lib/uu/args.sh
+. "$UU_LIB_DIR/args.sh"
+
+
+main() {
+  parse_args "$@"
+
+  need_tool uv
+  need_tool systemd-run
+  need_tool script
+  need_tool tail
+  need_tool awk
+  need_tool sed
+  need_tool grep
+
+  # Normalize target
+  local MODULE_ABS ENTRY_DEFAULT
+  local INPUT_ABS; INPUT_ABS=$(abs_dir "$TARGET_INPUT")
+  if [[ -d "$INPUT_ABS" ]]; then
+    MODULE_ABS="$INPUT_ABS"
+    ENTRY_DEFAULT="python main.py"
+  elif [[ -f "$INPUT_ABS" && "$INPUT_ABS" == *.py ]]; then
+    MODULE_ABS="$(dirname -- "$INPUT_ABS")"
+    ENTRY_DEFAULT="python $(basename -- "$INPUT_ABS")"
+  else
+    echo "[ERR] Target is neither a directory nor a .py file: $TARGET_INPUT" >&2; exit 4
+  fi
+
+  # Find uv project root (must exist)
+  local PROJECT_ROOT
+  PROJECT_ROOT=$(find_project_root "$MODULE_ABS") || { echo "[ERR] pyproject.toml not found above: $MODULE_ABS" >&2; exit 4; }
+
+  # Compute service name if not provided
+  if [[ -z "$SERVICE" ]]; then
+    local base; base=$(basename -- "$MODULE_ABS")
+    SERVICE=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | sed 's/[^a-z0-9._-]//g')
+  fi
+
+  # Compute entry if not provided
+  if [[ -z "$ENTRY" ]]; then
+    ENTRY="$ENTRY_DEFAULT"
+  fi
+
+  # Preflights
+  if [[ ! -d "$MODULE_ABS" ]]; then echo "[ERR] Module dir not found: $MODULE_ABS" >&2; exit 4; fi
+  if [[ ! -w "$MODULE_ABS" ]]; then echo "[ERR] Module dir not writable: $MODULE_ABS" >&2; exit 4; fi
+  if [[ "$ENTRY_DEFAULT" == "python main.py" && ! -f "$MODULE_ABS/main.py" ]]; then
+    warn "main.py not found in module dir; default ENTRY will likely fail. Consider --entry."
+  fi
+
+  info "Module dir   : $MODULE_ABS"
+  info "Project root : $PROJECT_ROOT"
+  info "Service name : $SERVICE"
+  info "Entrypoint   : $ENTRY"
+  info "Makefile out : $MAKEFILE_OUT"
+  info "README out   : $README_OUT"
+
+  if ! confirm "Proceed with these settings?"; then warn "Aborted by user"; exit 0; fi
+
+  cd "$MODULE_ABS"
+
+  # --- Prepare templated blocks ---
+  local mk_start mk_end rd_start rd_end
+  mk_start="### >>> uu:init make ($SERVICE) (DO NOT EDIT)"
+  mk_end="### <<< uu:init make ($SERVICE)"
+  rd_start="<!-- >>> uu:init readme ($SERVICE) -->"
+  rd_end="<!-- <<< uu:init readme ($SERVICE) -->"
+
+  local mk_block rd_block
+  # --- Build templates inline like original ---
+  local mk_block rd_block
+  read -r -d '' mk_block <<'EOF' || true
+${mk_start}
+# Make-only uu glue for service '${SERVICE}' (module-local)
+
+# === Fixed, overridable variables ===
+SERVICE := ${SERVICE}
+MODULE  := \$(abspath .)
+PROJECT := ${PROJECT_ROOT}
+ENTRY   ?= ${ENTRY}
+RELOAD  ?= 1
+# Stable-but-unique unit name derived from module path to avoid clashes with any persistent units
+UNIT_SUFFIX := \$(shell echo -n "\$(abspath .)" | sha1sum | cut -c1-8)
+UNIT    := uu-\$(SERVICE)-\$(UNIT_SUFFIX)
+RUNDIR  := \$(MODULE)/.uu/\$(SERVICE)
+RUNLOG  := \$(RUNDIR)/run.log
+TAIL   ?= 100
+UU_ASCII ?= 0
+SECURE ?= 0
+KEEP_N ?= 10
+# XDG state for persistent per-run logs (archives)
+STATE_DIR := \$(if \$(XDG_STATE_HOME),\$(XDG_STATE_HOME),\$(HOME)/.local/state)
+LOGDIR    := \$(STATE_DIR)/uu/\$(SERVICE)/logs
+
+# Aggregate the list of services present in this Makefile (one entry per block)
+UU_SERVICES += ${SERVICE}
+
+.PHONY: up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SERVICE} ps.${SERVICE} restart.${SERVICE} doctor.${SERVICE} unit.${SERVICE} journal.${SERVICE}
+
+# Target-specific vars to avoid cross-service bleed
+TARGETS_${SERVICE} := up.${SERVICE} down.${SERVICE} logs.${SERVICE} follow.${SERVICE} ps.${SERVICE} restart.${SERVICE} doctor.${SERVICE} unit.${SERVICE} journal.${SERVICE}
+\$(TARGETS_${SERVICE}): SERVICE:=${SERVICE}
+\$(TARGETS_${SERVICE}): MODULE:=\$(abspath .)
+\$(TARGETS_${SERVICE}): PROJECT:=${PROJECT_ROOT}
+\$(TARGETS_${SERVICE}): ENTRY:=${ENTRY}
+\$(TARGETS_${SERVICE}): UNIT:=uu-${SERVICE}-\$(shell echo -n "\$(abspath .)" | sha1sum | cut -c1-8)
+\$(TARGETS_${SERVICE}): RUNDIR:=\$(abspath .)/.uu/${SERVICE}
+\$(TARGETS_${SERVICE}): RUNLOG:=\$(abspath .)/.uu/${SERVICE}/run.log
+
+# Unsuffixed targets: define only once, with runtime service selection
+ifndef UU_UNSUFFIXED_DEFINED
+UU_UNSUFFIXED_DEFINED := 1
+
+.PHONY: up down logs follow ps restart doctor unit journal check-service
+
+# Choose default service if only one exists; otherwise require SERVICE=<name>
+# Only honor SERVICE when passed on the command line, not from later blocks
+DEFAULT_SERVICE = \$(if \$(filter 1,\$(words \$(UU_SERVICES))),\$(firstword \$(UU_SERVICES)),)
+CLI_SERVICE = \$(if \$(filter command line,\$(origin SERVICE)),\$(SERVICE),)
+TARGET_SERVICE = \$(if \$(CLI_SERVICE),\$(CLI_SERVICE),\$(DEFAULT_SERVICE))
+
+check-service:
+	@if [ -z "\$(TARGET_SERVICE)" ]; then \\
+	  echo "[UU] Multiple services detected: \$(UU_SERVICES)"; \\
+	  echo "[UU] Please specify SERVICE=<name>, e.g.: SERVICE=\$(firstword \$(UU_SERVICES)) make up"; \\
+	  exit 2; \\
+	fi
+
+up: check-service
+	@\$(MAKE) -s restart.\$(TARGET_SERVICE)
+down: check-service
+	@\$(MAKE) -s down.\$(TARGET_SERVICE)
+logs: check-service
+	@\$(MAKE) -s logs.\$(TARGET_SERVICE)
+follow: check-service
+	@\$(MAKE) -s follow.\$(TARGET_SERVICE)
+ps: check-service
+	@\$(MAKE) -s ps.\$(TARGET_SERVICE)
+restart: check-service
+	@\$(MAKE) -s restart.\$(TARGET_SERVICE)
+doctor: check-service
+	@\$(MAKE) -s doctor.\$(TARGET_SERVICE)
+unit: check-service
+	@\$(MAKE) -s unit.\$(TARGET_SERVICE)
+journal: check-service
+	@\$(MAKE) -s journal.\$(TARGET_SERVICE)
+endif
+
+# Start: create state + runtime dir, create per-run logfile, symlink run.log, launch via systemd-run
+up.${SERVICE}:
+	@mkdir -p "\$(RUNDIR)" "\$(LOGDIR)"
+	@TS=\$\$(date -u +%Y%m%dT%H%M%SZ); LOGFILE="\$(LOGDIR)/\$(SERVICE)-\$\$TS-\$(UNIT_SUFFIX).log"; \\
+	  ln -sfn "\$\$LOGFILE" "\$(RUNLOG)"; \\
+	  echo "[UU] up svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE) entry=\"\$(ENTRY)\" reload=\$(RELOAD) log=\$\$LOGFILE"; \\
+	  echo "[UU] log handle: \$(RUNLOG) -> \$\$(readlink -f \"\$(RUNLOG)\" 2>/dev/null || echo -)"
+	# Force unbuffered Python IO so logs immediately reach RUNLOG
+	@if [ "\$(SECURE)" = "1" ]; then \\
+	  systemd-run --user \\
+	    --unit="\$(UNIT)" \\
+	    --property=WorkingDirectory="\$(MODULE)" \\
+	    --property=NoNewPrivileges=yes \\
+	    --property=PrivateTmp=yes \\
+	    --property=ProtectSystem=strict \\
+	    --property=ProtectHome=read-only \\
+	    --property=RestrictSUIDSGID=yes \\
+	    --property=RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6" \\
+	    --property=LockPersonality=yes \\
+	    --property=MemoryDenyWriteExecute=yes \\
+	    --property=TimeoutStartSec=30s \\
+	    --property=Restart=no \\
+	    --property=StandardOutput=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
+	    --property=StandardError=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
+	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
+    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+                if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
+                  PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
+                  cd "\$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null; \\
+                else \\
+                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \\
+                  exit 2; \\
+                fi; \\
+              else \\
+                cd "\$(MODULE)" && uv run --project "\$(PROJECT)" -- \$(ENTRY); \\
+              fi'; \\
+	else \\
+	  systemd-run --user \\
+	    --unit="\$(UNIT)" \\
+	    --property=WorkingDirectory="\$(MODULE)" \\
+	    --property=TimeoutStartSec=30s \\
+	    --property=Restart=no \\
+	    --property=StandardOutput=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
+	    --property=StandardError=append:"\$$(readlink -f \"\$(RUNLOG)\")" \\
+	    --setenv=PYTHONUNBUFFERED=1 --setenv=PYTHONUTF8=1 \\
+    bash -lc 'if [ "\$(RELOAD)" = "1" ]; then \\
+                if uv run --project "\$(PROJECT)" -- python -c "import pymon" >/dev/null 2>&1; then \\
+                  PYMON_FILE=\$\$(echo "\$(ENTRY)" | sed "s/^python //"); \\
+                  cd "\$(MODULE)" && tail -f /dev/null | script -qfc "uv run --project \"\$(PROJECT)\" -- pymon -i .uu/ -i __pycache__ -i .git -i .venv \$\$PYMON_FILE" /dev/null; \\
+                else \\
+                  echo "[UU] pymon not found; RELOAD=1 requires pymon. Disable via RELOAD=0 or install it (uv add py-mon)"; \\
+                  exit 2; \\
+                fi; \\
+              else \\
+                cd "\$(MODULE)" && uv run --project "\$(PROJECT)" -- \$(ENTRY); \\
+              fi'; \\
+	fi || { \\
+	  echo "[UU] start failed. Try: make doctor.${SERVICE}"; \\
+	  echo "[UU] troubleshoot: journalctl --user -u \$(UNIT) -e"; \\
+	  echo "[UU] tip: enable hardening with SECURE=1 once .venv exists"; \\
+	  exit 1; \\
+	}
+	@# Prune archives: keep last N by mtime
+	@find "\$(LOGDIR)" -maxdepth 1 -type f -name "\$(SERVICE)-*.log*" -printf '%T@ %p\n' | \\
+	  sort -nr | awk '{print $$2}' | awk 'NR>\$(KEEP_N)' | xargs -r rm -f --
+
+# Stop: stop the unit and clean ephemeral logs/state
+down.${SERVICE}:
+	@echo "[UU] down svc=\$(SERVICE) unit=\$(UNIT) dir=\$(MODULE)"
+	@systemctl --user stop "\$(UNIT)" >/dev/null 2>&1 || true
+	@systemctl --user reset-failed "\$(UNIT)" >/dev/null 2>&1 || true
+	@rm -f "\$(RUNLOG)" "\$(RUNDIR)/meta.json" "\$(RUNDIR)/.lock" 2>/dev/null || true
+
+# Status: single-line summary for LLMs
+ps.${SERVICE}:
+	@ACTIVE=\$\$(systemctl --user show -p ActiveState --value "\$(UNIT)" 2>/dev/null || echo inactive); \\
+	SUB=\$\$(systemctl --user show -p SubState --value "\$(UNIT)" 2>/dev/null || echo -); \\
+	PID=\$\$(systemctl --user show -p MainPID --value "\$(UNIT)" 2>/dev/null || echo -); \\
+	STATE=INACTIVE; \\
+	if [ "\$\$ACTIVE" = "active" ] && [ "\$\$SUB" = "running" ]; then STATE=RUNNING; \\
+	elif [ "\$\$ACTIVE" = "activating" ]; then STATE=STARTING; \\
+	elif [ "\$\$ACTIVE" = "failed" ]; then STATE=FAILED; fi; \\
+	echo "[UU] ps svc=\$(SERVICE) state=\$\$STATE pid=\$\$PID uptime=-"
+
+# Logs (snapshot): default non-blocking view
+logs.${SERVICE}:
+	@echo "[UU] logs svc=\$(SERVICE) tail=\$(TAIL) dir=\$(MODULE)"; \\
+	if [ "\$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; \\
+	if [ -s "\$(RUNLOG)" ]; then \\
+	  tail -n \$(TAIL) "\$(RUNLOG)" | sed 's/^/[LOG] /'; \\
+	else \\
+	  ACTIVE=\$\$(systemctl --user is-active "\$(UNIT)" 2>/dev/null || true); \\
+	  if [ "\$\$ACTIVE" = "active" ] || [ "\$\$ACTIVE" = "activating" ]; then \\
+	    journalctl --user -u "\$(UNIT)" -n \$(TAIL) --no-pager | sed 's/^/[JRN] /'; exit 0; \\
+	  else \\
+	    echo "[UU] logs svc=\$(SERVICE) no-log not-running dir=\$(MODULE)"; exit 5; \\
+	  fi; \\
+	fi
+
+# Logs (follow): stream raw lines after a single header and separator
+follow.${SERVICE}:
+	@echo "[UU] logs svc=\$(SERVICE) follow dir=\$(MODULE)"; \\
+	if [ "\$(UU_ASCII)" = "1" ]; then echo "------[ LOG ]-----"; else echo "──────────────[ LOG ]─────────────"; fi; \\
+	if [ -s "\$(RUNLOG)" ]; then \\
+	  tail -F "\$(RUNLOG)"; \\
+	else \\
+	  journalctl --user -u "\$(UNIT)" -f --no-pager; \\
+	fi
+
+# Restart: down then up
+restart.${SERVICE}:
+	@\$(MAKE) -s down.${SERVICE} || true
+	@\$(MAKE) -s up.${SERVICE}
+
+# Doctor: run without systemd for quick diagnostics
+doctor.${SERVICE}:
+	@echo "[UU] doctor svc=\$(SERVICE) dir=\$(MODULE) entry=\"\$(ENTRY)\""; \\
+	uv run --project "\$(PROJECT)" -- \$(ENTRY)
+
+# Inspect unit metadata and journal quickly
+unit.${SERVICE}:
+	@systemctl --user show "\$(UNIT)" -p Id,LoadState,ActiveState,SubState,FragmentPath --no-pager
+
+journal.${SERVICE}:
+	@journalctl --user -u "\$(UNIT)" -n \$(TAIL) --no-pager
+${mk_end}
+EOF
+
+  read -r -d '' rd_block <<'EOF' || true
+${rd_start}
+### Make-only control for '${SERVICE}'
+
+#### Quick Commands (Unsuffixed)
+
+For single-service modules, use these short commands:
+
+\`\`\`sh
+make up      # Start with live reload (default)
+make down    # Stop and clean
+make logs    # Recent logs
+make follow  # Stream logs
+make ps      # Status
+make restart # Restart service
+make unit    # Inspect systemd unit metadata
+make journal # Show recent journal entries
+\`\`\`
+
+#### Service-Specific Commands
+
+For multi-service setups or explicit control:
+
+\`\`\`sh
+make up.${SERVICE}      # Start this specific service
+make down.${SERVICE}    # Stop this specific service
+make logs.${SERVICE}    # Logs for this service
+make follow.${SERVICE}  # Follow logs for this service
+make ps.${SERVICE}      # Status for this service
+\`\`\`
+
+#### Live Reload (Development)
+
+By default, services start with **live reload** using \`pymon\`:
+
+\`\`\`sh
+make up                    # Starts with live reload (RELOAD=1)
+RELOAD=0 make up          # Disable live reload
+\`\`\`
+
+Live reload watches for file changes and automatically restarts your service. Requires \`pymon\`:
+
+\`\`\`sh
+uv add py-mon             # Add live-reload tool
+\`\`\`
+
+Ignored paths: \`.uu/\`, \`__pycache__\`, \`.git\`, \`.venv\`
+\n+If \`pymon\` is not installed and \`RELOAD=1\`, the start command exits gracefully with a helpful message. Disable reload via \`RELOAD=0\` or install \`py-mon\`.
+
+Note: Live reload is launched under a pseudo‑TTY using \`script(1)\` with a persistent stdin, so it works correctly under \`systemd\` and avoids EOF on \`pymon\`'s input.
+
+#### Configuration
+
+> Default entry: **${ENTRY}** (module: ${MODULE_ABS}, project: ${PROJECT_ROOT})
+> Override example: \`make up ENTRY="python worker.py --port 9000"\`
+
+#### Advanced Options
+
+Hardened mode (opt-in): set \`SECURE=1\` to enable stronger systemd sandboxing.
+
+\`\`\`sh
+SECURE=1 make up
+\`\`\`
+
+Doctor (no systemd): run the command in-foreground for quick verification.
+
+\`\`\`sh
+make doctor
+\`\`\`
+
+#### Multi-Service Usage
+
+When multiple services exist in the same Makefile, unsuffixed commands require explicit service selection:
+
+\`\`\`sh
+SERVICE=worker make up    # Start specific service
+make up.worker           # Alternative syntax
+\`\`\`
+\n+If more than one service is detected and no \`SERVICE\` is set, unsuffixed commands emit a helpful error listing available services.
+
+#### Troubleshooting
+
+- **Live reload fails**: Ensure \`pymon\` is installed: \`uv add py-mon\`
+- **First run fails**: Ensure \`uv\` can create \`.venv\` (avoid \`ProtectHome=read-only\` unless venv exists)
+- **Check logs**: \`make logs\` or journal: \`journalctl --user -u uu-${SERVICE} -e\`
+- **Service conflicts**: Use service-specific targets: \`make up.${SERVICE}\`
+${rd_end}
+EOF
+
+  # --- Post-process template placeholders (safe text substitution) ---
+  mk_block=$(printf '%s' "$mk_block" | sed \
+    -e "s/\${mk_start}/$mk_start/g" \
+    -e "s/\${mk_end}/$mk_end/g" \
+    -e "s/\${SERVICE}/$(printf '%s' "$SERVICE" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${PROJECT_ROOT}/$(printf '%s' "$PROJECT_ROOT" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${ENTRY}/$(printf '%s' "$ENTRY" | sed 's/[\\&/]/\\&/g')/g")
+  rd_block=$(printf '%s' "$rd_block" | sed \
+    -e "s/\${rd_start}/$rd_start/g" \
+    -e "s/\${rd_end}/$rd_end/g" \
+    -e "s/\${SERVICE}/$(printf '%s' "$SERVICE" | sed 's/[\\&/]/\\&/g')/g" \
+    -e "s/\${ENTRY}/$(printf '%s' "$ENTRY" | sed 's/[\\&/]/\\&/g')/g")
+
+  # --- Write files in module dir ---
+  if (( ! README_ONLY )); then upsert_block "$MAKEFILE_OUT" "$mk_start" "$mk_end" "$mk_block"; fi
+  if (( ! MK_ONLY )); then upsert_block "$README_OUT" "$rd_start" "$rd_end" "$rd_block"; fi
+
+  # Ensure .gitignore has .uu/
+  if [[ -f .gitignore ]]; then
+    append_gitignore .gitignore ".uu/"
+  else
+    if (( DRY_RUN )); then info "DRY-RUN: would create .gitignore with '.uu/'"; else echo ".uu/" > .gitignore; ok "Created .gitignore with .uu/"; fi
+  fi
+
+  ok "Initialization complete. Next: cd '$MODULE_ABS' and run: make up.${SERVICE}"
+}
+
+main "$@"
+
+~
